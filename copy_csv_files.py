@@ -8,7 +8,7 @@ def create_directory(directory):
     if not os.path.exists(directory):
         os.makedirs(directory)
 
-def copy_files(csv_file, input_folder, output_folder):
+def copy_files(csv_file, input_folder, output_folder, exte):
     # Ensure input and output directories exist
     create_directory(output_folder)
     
@@ -20,12 +20,12 @@ def copy_files(csv_file, input_folder, output_folder):
         video_id = row['video_id']
         
         # Construct the input file path
-        input_file = os.path.join(input_folder, f"{video_id}.mp4")  # Assuming the file extension is .mp4, change it if needed
+        input_file = os.path.join(input_folder, f"{video_id}.{exte}")  # Assuming the file extension is .mp4, change it if needed
         
         # Check if the file exists
         if os.path.exists(input_file):
             # Construct the output file path
-            output_file = os.path.join(output_folder, f"{video_id}.mp4")
+            output_file = os.path.join(output_folder, f"{video_id}.{exte}")
             
             # Copy the file from input folder to output folder
             shutil.copy(input_file, output_file)
@@ -42,10 +42,14 @@ def main():
     
     # Parse arguments
     args = parser.parse_args()
-    input_fol = "./motionx_video/videos/" + args.subset
-    output_fol =  './copied/' + args.subset
+    videos_fol = "./motionxdata/videos/" + args.subset
+    motion_fol = "./motionxdata/motion/mesh_recovery/global_motion/" + args.subset
+
+    output_vid_fol =  './copied/' + args.subset
+    output_vis_fol =  './visjson/' + args.subset
     # Call the function to copy files
-    copy_files(args.subset+"_anomalies.csv", input_fol, output_fol)
+    copy_files("./csvs/"+args.subset+"_anomalies.csv", videos_fol, output_vid_fol, 'mp4')
+    copy_files("./csvs/"+args.subset+"_anomalies.csv", motion_fol, output_vis_fol, 'json')
 
 if __name__ == "__main__":
     main()

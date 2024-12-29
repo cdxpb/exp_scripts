@@ -5,10 +5,6 @@ import csv
 from scipy.spatial.transform import Rotation as R
 import argparse
 import json
-from smplx import SMPLX
-
-# model_path="./SMPLX_NEUTRAL.npz"
-# smplx_model = SMPLX(model_path)
 
 # Load SMPL data from .pt files
 def load_smpl_data(pt_dir, method):
@@ -34,39 +30,17 @@ def load_smpl_data(pt_dir, method):
                     smplxdata = data['annotations']
                     body_pose = []
                     transl = []
-                    root_orient = []
                         
                     for a in smplxdata:
                         body_pose.append(a['smplx_params']['pose_body'])
                         transl.append(a['smplx_params']['trans'])
-                        root_orient.append(a['smplx_params']['root_orient'])
                         
                     smpl_data[file[:-5]] = {
                         'transl': transl,
                         'body_pose': body_pose,
-                        'root_orient': root_orient
                     }
                 
     return smpl_data
-
-
-def compute_joint_positions(smplx_model, body_pose, root_orient, transl):
-    joint_positions = []
-    body_pose = np.array(body_pose)
-    
-    for frame_idx in range(len(body_pose)):
-        root_orientation = root_orient[frame_idx]  # Shape (3,)
-        body_pose_frame = body_pose[frame_idx].reshape(-1, 3)
-        
-        smplx_output = smplx_model.forward(
-            global_orient=torch.tensor(root_orientation, dtype=torch.float32, ).unsqueeze(0),  # Shape (1, 3)
-            body_pose=torch.tensor(body_pose_frame, dtype=torch.float32, ).unsqueeze(0),       # Shape (1, 21, 3)
-            transl=torch.tensor(transl[frame_idx], dtype=torch.float32, ).unsqueeze(0)         # Shape (1, 3)
-        )
-        joint_positions.append(smplx_output.joints[0].detach().numpy())
-
-    return np.array(joint_positions)
-
 
 # Compute root translation velocity and acceleration
 def compute_root_metrics(transl):
@@ -77,17 +51,6 @@ def compute_root_metrics(transl):
     mean_velocity = np.mean(velocities)
     mean_acceleration = np.mean(accelerations)
     
-    return mean_velocity, mean_acceleration
-
-# Compute velocity and acceleration for each joint
-def compute_joint_metrics(joint_positions):
-    velocities = np.linalg.norm(joint_positions[1:] - joint_positions[:-1], axis=2)  # Frame-to-frame velocity (N-1, num_joints)
-    accelerations = np.abs(velocities[1:] - velocities[:-1])  # Frame-to-frame acceleration (N-2, num_joints)
-
-    # Compute the mean over all frames and joints
-    mean_velocity = np.mean(velocities)
-    mean_acceleration = np.mean(accelerations)
-
     return mean_velocity, mean_acceleration
 
 # Compute body pose angular velocity and acceleration
@@ -121,8 +84,8 @@ def detect_anomalies(metrics, thresholds):
     anomalies = {
         'root_velocity': metrics['root_mean_velocity'] > thresholds['max_velocity'],
         'root_acceleration': metrics['root_mean_acceleration'] > thresholds['max_acceleration'],
-        'body_velocity': metrics['body_mean_velocity'] > thresholds['max_body_velocity'],
-        'body_acceleration': metrics['body_mean_acceleration'] > thresholds['max_body_acceleration']
+        'angular_velocity': metrics['body_mean_angular_velocity'] > thresholds['max_angular_velocity'],
+        'angular_acceleration': metrics['body_mean_angular_acceleration'] > thresholds['max_angular_acceleration']
     }
     return anomalies
 
@@ -135,7 +98,6 @@ def save_to_csv(results, output_csv, subset):
             'video_id',
             'root_mean_velocity', 'root_mean_acceleration',
             'body_mean_angular_velocity', 'body_mean_angular_acceleration',
-            'body_mean_velocity', 'body_mean_acceleration'
         ])
 
         # Write rows
@@ -146,18 +108,15 @@ def save_to_csv(results, output_csv, subset):
                 result['metrics']['root_mean_acceleration'],
                 result['metrics']['body_mean_angular_velocity'],
                 result['metrics']['body_mean_angular_acceleration'],
-                result['metrics']['body_mean_velocity'],
-                result['metrics']['body_mean_acceleration']
             ])
         
-    with open('./csvs/' +subset+'_anomalies.csv', mode='w', newline='') as f:
+    with open('./csvs/' +subset+'_anomalies_angular.csv', mode='w', newline='') as f:
         writer = csv.writer(f)
         # Write header
         writer.writerow([
             'video_id',
             'root_mean_velocity', 'root_mean_acceleration',
-            'body_mean_angular_velocity', 'body_mean_angular_acceleration','body_mean_velocity',
-            'body_mean_acceleration'
+            'body_mean_angular_velocity', 'body_mean_angular_acceleration',
         ])
         
         for result in results:
@@ -168,8 +127,6 @@ def save_to_csv(results, output_csv, subset):
                     result['metrics']['root_mean_acceleration'],
                     result['metrics']['body_mean_angular_velocity'],
                     result['metrics']['body_mean_angular_acceleration'],
-                    result['metrics']['body_mean_velocity'],
-                    result['metrics']['body_mean_acceleration']
                 ])
 
 
@@ -190,7 +147,7 @@ def main(pt_dir, output_csv):
         method=args.method
         if(method == 'motionx'):
             pt_dir = './motionxdata/motion/mesh_recovery/global_motion'
-
+    
     # if(args.directory):
     #     pt_dir = args.directory
         
@@ -201,13 +158,11 @@ def main(pt_dir, output_csv):
     thresholds = {
         'max_velocity': 0.085,               # Threshold for root mean velocity
         'max_acceleration': 0.06,         # Threshold for root mean acceleration
-        'max_body_velocity': 0.7,      # Threshold for body body velocity
-        'max_body_acceleration': 0.75   # Threshold for body angular acceleration
+        'max_angular_velocity': 0.085,      # Threshold for body angular velocity
+        'max_angular_acceleration': 0.06   # Threshold for body angular acceleration
     }
     
     smpl_data = load_smpl_data(pt_dir, method)
-    smplx_model = SMPLX(model_path="./smplx")  # Path to SMPLX model
-
     results = []
 
     for video_id, data in smpl_data.items():
@@ -220,17 +175,12 @@ def main(pt_dir, output_csv):
         root_mean_velocity, root_mean_acceleration = compute_root_metrics(data['transl'])
         body_mean_angular_velocity, body_mean_angular_acceleration = compute_body_pose_metrics(data['body_pose'])
 
-        joint_positions = compute_joint_positions(smplx_model, data['body_pose'], data['transl'], data['root_orient'])
-        mean_joint_velocities, mean_joint_accelerations = compute_joint_metrics(joint_positions)
-
 
         metrics = {
             'root_mean_velocity': root_mean_velocity,
             'root_mean_acceleration': root_mean_acceleration,
             'body_mean_angular_velocity': body_mean_angular_velocity,
-            'body_mean_angular_acceleration': body_mean_angular_acceleration,
-            'body_mean_velocity': mean_joint_velocities,
-            'body_mean_acceleration': mean_joint_accelerations
+            'body_mean_angular_acceleration': body_mean_angular_acceleration
         }
 
         # Detect anomalies
@@ -248,5 +198,10 @@ def main(pt_dir, output_csv):
 
 if __name__ == "__main__":
     pt_dir = "./"  # Directory containing .pt files
-    output_csv = "output.csv"         # Path to save the CSV
+    output_csv = "output_angular.csv"         # Path to save the CSV
     main(pt_dir, output_csv)
+
+
+model_path="./SMPLX_NEUTRAL.npz"
+smplx_model = SMPLX(model_path)
+
